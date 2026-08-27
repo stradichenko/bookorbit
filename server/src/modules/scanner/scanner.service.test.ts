@@ -3189,6 +3189,111 @@ describe('cross-library transfer', () => {
     expect(mockGateway.emitBookTransferred).toHaveBeenCalledWith({ fromLibraryId: 1, toLibraryId: 2, bookIds: [55] });
   });
 
+  it('does not transfer a book when the inode matches but size or mtime differ (inode reuse)', async () => {
+    const destinationFile = makeFileStat({
+      absolutePath: '/dest/Inbox/valid.epub',
+      relPath: 'Inbox/valid.epub',
+      ino: 4343n,
+      sizeBytes: 6000,
+      mtime: new Date('2024-06-01'),
+    });
+    const sourceFile = makeBookFile({
+      id: 510,
+      bookId: 55,
+      libraryFolderId: 10,
+      absolutePath: '/source/Book/book.epub',
+      relPath: 'Book/book.epub',
+      ino: 4343n,
+      fileHash: 'transfer-hash',
+      sizeBytes: 1024,
+      mtime: new Date('2024-01-01'),
+    });
+
+    const repo = makeRepo({
+      findLibraryFolders: vi.fn().mockResolvedValue([{ id: 22, path: '/dest', libraryId: 2 }]),
+      findBooksByLibraryFolder: vi.fn().mockResolvedValue([]),
+      findBookFilesByLibraryFolder: vi.fn().mockResolvedValue([]),
+      findMissingBookFileWithContextByIno: vi.fn().mockResolvedValue(null),
+      findBookFileWithContextByIno: vi.fn().mockResolvedValue({
+        file: sourceFile,
+        libraryId: 1,
+        bookStatus: 'present',
+        folderPath: '/source/Book',
+        libraryFolderPath: '/source',
+      }),
+      findMissingBookFileWithContextByHash: vi.fn().mockResolvedValue(null),
+      findBookFileWithContextByHash: vi.fn().mockResolvedValue(null),
+    });
+    mockFindCandidates.mockResolvedValue({
+      candidates: [makeCandidate('/dest/Inbox', [destinationFile])],
+      skippedDirs: new Set(),
+      unchangedDirs: new Set(),
+      dirMtimes: new Map(),
+    });
+    mockStat.mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
+
+    const done = awaitScan(repo);
+    const { service } = makeService(repo);
+    await service.startScan(2, 'manual');
+    await done;
+
+    expect(repo.moveBookToLibrary).not.toHaveBeenCalled();
+    expect(repo.createBook).toHaveBeenCalled();
+  });
+
+  it('transfers a book on an inode match with differing size or mtime when the source is in the same library', async () => {
+    const destinationFile = makeFileStat({
+      absolutePath: '/dest/Inbox/valid.epub',
+      relPath: 'Inbox/valid.epub',
+      ino: 4343n,
+      sizeBytes: 6000,
+      mtime: new Date('2024-06-01'),
+    });
+    const sourceFile = makeBookFile({
+      id: 510,
+      bookId: 55,
+      libraryFolderId: 21,
+      absolutePath: '/dest/Old/book.epub',
+      relPath: 'Old/book.epub',
+      ino: 4343n,
+      fileHash: 'transfer-hash',
+      sizeBytes: 1024,
+      mtime: new Date('2024-01-01'),
+    });
+
+    const repo = makeRepo({
+      findLibraryFolders: vi.fn().mockResolvedValue([{ id: 22, path: '/dest', libraryId: 2 }]),
+      findBooksByLibraryFolder: vi.fn().mockResolvedValue([]),
+      findBookFilesByLibraryFolder: vi.fn().mockResolvedValue([]),
+      findBookFilesByBookId: vi.fn().mockResolvedValue([sourceFile]),
+      findMissingBookFileWithContextByIno: vi.fn().mockResolvedValue({
+        file: sourceFile,
+        libraryId: 2,
+        bookStatus: 'missing',
+        folderPath: '/dest/Old',
+        libraryFolderPath: '/dest',
+      }),
+      findBookFileWithContextByIno: vi.fn().mockResolvedValue(null),
+      findMissingBookFileWithContextByHash: vi.fn().mockResolvedValue(null),
+      findBookFileWithContextByHash: vi.fn().mockResolvedValue(null),
+    });
+    mockFindCandidates.mockResolvedValue({
+      candidates: [makeCandidate('/dest/Inbox', [destinationFile])],
+      skippedDirs: new Set(),
+      unchangedDirs: new Set(),
+      dirMtimes: new Map(),
+    });
+    mockStat.mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
+
+    const done = awaitScan(repo);
+    const { service } = makeService(repo);
+    await service.startScan(2, 'manual');
+    await done;
+
+    expect(repo.moveBookToLibrary).toHaveBeenCalledWith(55, 2, 22, '/dest/Inbox');
+    expect(repo.createBook).not.toHaveBeenCalled();
+  });
+
   it('transfers a source book when the previous file path is now a directory', async () => {
     const destinationFile = makeFileStat({
       absolutePath: '/dest/Inbox/book.epub',
