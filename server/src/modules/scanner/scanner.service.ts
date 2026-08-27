@@ -1948,6 +1948,14 @@ export class ScannerService implements OnApplicationBootstrap {
     return null;
   }
 
+  // A moved file preserves its size and mtime; an inode reused by a different
+  // file does not. This guards cross-library file identity against inode reuse
+  // after deletion, where a new file can pick up a freed inode and be mistaken
+  // for a previously deleted one.
+  private isSameFileRecord(dbFile: { sizeBytes: number | null; mtime: Date | null }, fileStat: FileStat): boolean {
+    return dbFile.sizeBytes === fileStat.sizeBytes && dbFile.mtime?.getTime() === fileStat.mtime.getTime();
+  }
+
   private async pathExists(path: string): Promise<boolean> {
     try {
       await stat(path);
@@ -2008,6 +2016,7 @@ export class ScannerService implements OnApplicationBootstrap {
       if (file.ino === 0n) continue;
       const byIno = await this.scannerRepo.findMissingBookFileWithContextByIno(file.ino);
       if (!byIno || (await this.pathExistsAsDistinctEntry(byIno.file.absolutePath, file.absolutePath))) continue;
+      if (!this.isSameFileRecord(byIno.file, file)) continue;
       sourceBookId = byIno.file.bookId;
       sourceLibraryId = byIno.libraryId;
       break;
@@ -2019,6 +2028,7 @@ export class ScannerService implements OnApplicationBootstrap {
         const byIno = await this.scannerRepo.findBookFileWithContextByIno(file.ino);
         if (!byIno || byIno.file.absolutePath === file.absolutePath) continue;
         if (await this.fileExistsAsDistinctEntry(byIno.file.absolutePath, file.absolutePath)) continue;
+        if (!this.isSameFileRecord(byIno.file, file)) continue;
         sourceBookId = byIno.file.bookId;
         sourceLibraryId = byIno.libraryId;
         break;
@@ -2263,6 +2273,7 @@ export class ScannerService implements OnApplicationBootstrap {
       return null;
     }
     if (await this.pathExistsAsDistinctEntry(globalByIno.file.absolutePath, fileStat.absolutePath)) return null;
+    if (!this.isSameFileRecord(globalByIno.file, fileStat)) return null;
 
     const oldAbsolutePath = globalByIno.file.absolutePath;
     const sizeUnchanged = fileStat.sizeBytes === globalByIno.file.sizeBytes;
