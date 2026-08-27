@@ -1715,6 +1715,11 @@ export class BookRepository {
       .where(inArray(books.id, bookIds));
   }
 
+  async findScanInvalidationFolders(bookIds: number[]): Promise<{ libraryFolderId: number; folderPath: string }[]> {
+    if (bookIds.length === 0) return [];
+    return this.db.select({ libraryFolderId: books.libraryFolderId, folderPath: books.folderPath }).from(books).where(inArray(books.id, bookIds));
+  }
+
   async findRecommendationTitlesByBookIds(bookIds: number[]): Promise<BookRecommendation[]> {
     if (bookIds.length === 0) return [];
 
